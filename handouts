@@ -1,0 +1,61 @@
+﻿#!/usr/bin/env python3
+
+import argparse
+import os
+import platform
+import string
+import shutil
+import subprocess
+import tempfile
+import sys
+
+
+def get_script_path():
+    return os.path.dirname(os.path.realpath(sys.argv[0]))
+
+parser = argparse.ArgumentParser()
+parser.add_argument('path', type=str, help='path to process')
+parser.add_argument('--slides-per-page', type=int, default=3, help='number of slides per page')
+parser.add_argument('--title', type=str, default='', help='title')
+parser.add_argument('--subtitle', type=str, default='', help='subtitle')
+parser.add_argument('--slide-width', type=str, default='10cm', help='width of slide')
+parser.add_argument('--blank-width', type=str, default='6.25cm', help='width of blank')
+parser.add_argument('--blank-file', type=str, default=os.path.join(get_script_path(), 'lined-paper-template-for-kids.jpg'), help='path to blank picture')
+args = parser.parse_args()
+
+def split(path, output_path):
+    convert = os.path.join(os.environ['UserProfile'], 'scoop', 'apps', 'ImageMagick', 'current', 'convert.exe') if platform.system() == 'Windows' else 'convert'
+    cmd = [ convert, '-density', '300', '-scene', '1', path, os.path.join(output_path, 'image-%03d.png') ]
+    subprocess.run(cmd).check_returncode()
+    return sorted(os.listdir(output_path))
+
+def get_tabular(args, files):
+    pages = (len(files) + args.slides_per_page - 1) // args.slides_per_page
+    data = ''
+    for page in range(pages):
+        if page > 0:
+            data += '\\newpage\n'
+        data += '\\begin{table}[]\n'
+        data += '\\begin{tabular}{ll}\n'
+        for slide in range(min(args.slides_per_page, len(files) - page * args.slides_per_page)):
+            if slide > 0:
+                data += ' & \\\\\n'
+            data += '\\includegraphics[width={}]{{{}}} & \\includegraphics[width={}]{{{}}} \\\\\n'.format(args.slide_width, files[args.slides_per_page*page+slide], args.blank_width, args.blank_file.replace('\\', '/'))
+        data += '\\end{tabular}\n'
+        data += '\\end{table}\n'
+    return data
+
+with tempfile.TemporaryDirectory() as output_path:
+    files = split(args.path, output_path)
+    data = {}
+    data['title'] = args.title
+    data['subtitle'] = args.subtitle
+    data['data'] = get_tabular(args, files)
+    with open(os.path.join(get_script_path(), 'handouts.tex')) as template_file:
+        template = string.Template(template_file.read())
+    basename = os.path.splitext(args.path)[0]
+    tex_path = os.path.join(output_path, '{}.tex'.format(os.path.basename(basename)))
+    with open(tex_path, 'w', encoding='utf-8') as tex_file:
+        tex_file.write(template.substitute(data))
+    subprocess.run(['pdflatex', tex_path, '-output-directory', output_path]).check_returncode()
+    shutil.copy2(os.path.join(output_path, '{}.pdf'.format(os.path.basename(basename))), '{}-handouts.pdf'.format(basename))
